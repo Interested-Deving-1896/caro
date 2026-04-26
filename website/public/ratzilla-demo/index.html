@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Caro TUI Demo</title>
+    
+<script type="module">
+import init, * as bindings from '/caro-tui-demo-9267cc4179ab21d5.js';
+const wasm = await init({ module_or_path: '/caro-tui-demo-9267cc4179ab21d5_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #0a0a0f;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #ratzilla {
+            width: 100%;
+            max-width: 900px;
+            height: 550px;
+        }
+    </style>
+<link rel="modulepreload" href="/caro-tui-demo-9267cc4179ab21d5.js" crossorigin="anonymous" integrity="sha384-EvjmzFGkGIpTr7QapVFuKeScPnNrtXHoEGmd951rw+xkp2YdrNSWY8uYYNZj1NG+"><link rel="preload" href="/caro-tui-demo-9267cc4179ab21d5_bg.wasm" crossorigin="anonymous" integrity="sha384-KROTzTdVpesRT5TPP6uso8t0y3lL0rTMtmtRruyv6LEA2wYMhVRKxQoJtVfgxP33" as="fetch" type="application/wasm"></head>
+<body>
+    <div id="ratzilla"></div>
+</body>
+</html>

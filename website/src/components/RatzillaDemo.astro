@@ -356,8 +356,15 @@ const { height = "500px", showFallback = true } = Astro.props;
     }
 
     try {
-      // Dynamic import of the WASM module
-      const wasmModule = await import('/ratzilla-demo/caro_tui_demo.js');
+      // Extract the hashed wasm filename from trunk's index.html
+      const res = await fetch('/ratzilla-demo/index.html');
+      const html = await res.text();
+      const match = html.match(/caro-tui-demo-([a-f0-9]+)\.js/);
+      if (!match) throw new Error('Could not find WASM JS loader');
+      const hash = match[1];
+
+      // Dynamically import the WASM module
+      const wasmModule = await import(`/ratzilla-demo/caro-tui-demo-${hash}.js`);
       await wasmModule.default();
 
       // Hide loading state when WASM is ready

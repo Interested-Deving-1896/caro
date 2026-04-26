@@ -3,13 +3,12 @@
 //! This Ratzilla-powered WebAssembly application provides an authentic
 //! terminal experience showcasing Caro's command generation and safety validation.
 
-use rand::seq::SliceRandom;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
-    Frame,
+    widgets::{Block, Borders, Paragraph, Wrap},
+    Frame, Terminal,
 };
 use ratzilla::{DomBackend, WebRenderer};
 use std::cell::RefCell;
@@ -20,7 +19,6 @@ use wasm_bindgen::prelude::*;
 // Demo Data
 // ============================================================================
 
-/// Sample prompts users can try
 const SAMPLE_PROMPTS: &[(&str, &str, SafetyLevel)] = &[
     (
         "find large files over 100MB",
@@ -87,7 +85,7 @@ impl SafetyLevel {
         match self {
             SafetyLevel::Safe => Color::Green,
             SafetyLevel::Moderate => Color::Yellow,
-            SafetyLevel::Dangerous => Color::Rgb(255, 165, 0), // Orange
+            SafetyLevel::Dangerous => Color::Rgb(255, 165, 0),
             SafetyLevel::Critical => Color::Red,
         }
     }
@@ -125,15 +123,15 @@ impl SafetyLevel {
 // ============================================================================
 
 #[derive(Clone, Copy, PartialEq)]
-enum AppState {
+enum FrameState {
     Welcome,
     Typing,
     Thinking,
     Result,
 }
 
-struct App {
-    state: AppState,
+struct CaroApp {
+    state: FrameState,
     input: String,
     cursor_pos: usize,
     current_result: Option<(String, SafetyLevel)>,
@@ -145,10 +143,10 @@ struct App {
     show_suggestions: bool,
 }
 
-impl Default for App {
+impl Default for CaroApp {
     fn default() -> Self {
         Self {
-            state: AppState::Welcome,
+            state: FrameState::Welcome,
             input: String::new(),
             cursor_pos: 0,
             current_result: None,
@@ -162,86 +160,87 @@ impl Default for App {
     }
 }
 
-impl App {
-    fn handle_key(&mut self, key: &str) {
+impl CaroApp {
+    fn handle_key(&mut self, key_event: &ratzilla::event::KeyEvent) {
+        let key_code = &key_event.code;
+        
         match self.state {
-            AppState::Welcome => {
-                self.state = AppState::Typing;
+            FrameState::Welcome => {
+                self.state = FrameState::Typing;
             }
-            AppState::Typing => {
-                match key {
-                    "Enter" => {
+            FrameState::Typing => {
+                match key_code {
+                    ratzilla::event::KeyCode::Enter => {
                         if !self.input.is_empty() {
                             self.process_input();
                         }
                     }
-                    "Backspace" => {
+                    ratzilla::event::KeyCode::Backspace => {
                         if self.cursor_pos > 0 {
                             self.input.remove(self.cursor_pos - 1);
                             self.cursor_pos -= 1;
                         }
                     }
-                    "ArrowLeft" => {
+                    ratzilla::event::KeyCode::Left => {
                         if self.cursor_pos > 0 {
                             self.cursor_pos -= 1;
                         }
                     }
-                    "ArrowRight" => {
+                    ratzilla::event::KeyCode::Right => {
                         if self.cursor_pos < self.input.len() {
                             self.cursor_pos += 1;
                         }
                     }
-                    "ArrowUp" => {
+                    ratzilla::event::KeyCode::Up => {
                         if self.show_suggestions && self.selected_suggestion > 0 {
                             self.selected_suggestion -= 1;
                         }
                     }
-                    "ArrowDown" => {
+                    ratzilla::event::KeyCode::Down => {
                         if self.show_suggestions {
                             self.selected_suggestion = (self.selected_suggestion + 1)
                                 .min(SAMPLE_PROMPTS.len().saturating_sub(1));
                         }
                     }
-                    "Tab" => {
-                        // Auto-complete from suggestion
+                    ratzilla::event::KeyCode::Tab => {
                         if self.show_suggestions {
                             self.input = SAMPLE_PROMPTS[self.selected_suggestion].0.to_string();
                             self.cursor_pos = self.input.len();
                         }
                     }
-                    "Escape" => {
+                    ratzilla::event::KeyCode::Esc => {
                         self.input.clear();
                         self.cursor_pos = 0;
                         self.show_suggestions = true;
                     }
-                    _ if key.len() == 1 => {
-                        self.input.insert(self.cursor_pos, key.chars().next().unwrap());
+                    ratzilla::event::KeyCode::Char(c) => {
+                        self.input.insert(self.cursor_pos, *c);
                         self.cursor_pos += 1;
                         self.show_suggestions = self.input.len() < 3;
                     }
                     _ => {}
                 }
             }
-            AppState::Thinking => {
-                // Ignore input while thinking
-            }
-            AppState::Result => {
-                match key {
-                    "Enter" | "Escape" | " " => {
-                        self.state = AppState::Typing;
+            FrameState::Thinking | FrameState::Result => {
+                if matches!(key_code, 
+                    ratzilla::event::KeyCode::Enter 
+                    | ratzilla::event::KeyCode::Esc 
+                    | ratzilla::event::KeyCode::Char(' ')
+                ) {
+                    if self.state == FrameState::Result {
+                        self.state = FrameState::Typing;
                         self.input.clear();
                         self.cursor_pos = 0;
                         self.current_result = None;
                         self.show_suggestions = true;
                     }
-                    _ => {}
                 }
             }
         }
     }
 
     fn process_input(&mut self) {
-        self.state = AppState::Thinking;
+        self.state = FrameState::Thinking;
         self.thinking_frame = 0;
         self.thinking_dots = 0;
     }
@@ -249,15 +248,13 @@ impl App {
     fn tick(&mut self) {
         self.frame_count += 1;
 
-        if self.state == AppState::Thinking {
+        if self.state == FrameState::Thinking {
             self.thinking_frame += 1;
 
-            // Update dots animation
             if self.thinking_frame % 10 == 0 {
                 self.thinking_dots = (self.thinking_dots + 1) % 4;
             }
 
-            // Simulate processing time (about 1.5 seconds)
             if self.thinking_frame > 45 {
                 self.generate_result();
             }
@@ -267,12 +264,10 @@ impl App {
     fn generate_result(&mut self) {
         let input_lower = self.input.to_lowercase();
 
-        // Try to find a matching sample
         let result = SAMPLE_PROMPTS
             .iter()
             .find(|(prompt, _, _)| input_lower.contains(&prompt.to_lowercase()))
             .or_else(|| {
-                // Fuzzy match on keywords
                 SAMPLE_PROMPTS.iter().find(|(prompt, _, _)| {
                     let prompt_words: Vec<&str> = prompt.split_whitespace().collect();
                     let input_words: Vec<&str> = input_lower.split_whitespace().collect();
@@ -283,7 +278,7 @@ impl App {
             })
             .cloned();
 
-        if let Some((prompt, command, safety)) = result {
+        if let Some((_, command, safety)) = result {
             self.history.push((
                 self.input.clone(),
                 command.to_string(),
@@ -291,13 +286,13 @@ impl App {
             ));
             self.current_result = Some((command.to_string(), safety));
         } else {
-            // Generate a generic safe response
-            let generic_commands = [
+            let generic_commands: &[(&str, SafetyLevel)] = &[
                 ("echo \"Processing your request...\"", SafetyLevel::Safe),
                 ("ls -la", SafetyLevel::Safe),
                 ("pwd", SafetyLevel::Safe),
             ];
-            let cmd = generic_commands.choose(&mut rand::thread_rng()).unwrap();
+            let idx = self.history.len() % generic_commands.len();
+            let cmd = generic_commands[idx];
             self.history.push((
                 self.input.clone(),
                 cmd.0.to_string(),
@@ -306,7 +301,7 @@ impl App {
             self.current_result = Some((cmd.0.to_string(), cmd.1));
         }
 
-        self.state = AppState::Result;
+        self.state = FrameState::Result;
     }
 }
 
@@ -314,16 +309,15 @@ impl App {
 // Rendering
 // ============================================================================
 
-fn draw(frame: &mut Frame, app: &App) {
+fn draw(frame: &mut Frame, app: &CaroApp) {
     let area = frame.area();
 
-    // Main layout
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Header
-            Constraint::Min(10),    // Main content
-            Constraint::Length(3),  // Status bar
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(3),
         ])
         .split(area);
 
@@ -347,7 +341,7 @@ fn draw_header(frame: &mut Frame, area: Rect) {
     frame.render_widget(header, area);
 }
 
-fn draw_main(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_main(frame: &mut Frame, area: Rect, app: &CaroApp) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -362,10 +356,10 @@ fn draw_main(frame: &mut Frame, area: Rect, app: &App) {
         .split(area)[0];
 
     match app.state {
-        AppState::Welcome => draw_welcome(frame, inner),
-        AppState::Typing => draw_typing(frame, inner, app),
-        AppState::Thinking => draw_thinking(frame, inner, app),
-        AppState::Result => draw_result(frame, inner, app),
+        FrameState::Welcome => draw_welcome(frame, inner),
+        FrameState::Typing => draw_typing(frame, inner, app),
+        FrameState::Thinking => draw_thinking(frame, inner, app),
+        FrameState::Result => draw_result(frame, inner, app),
     }
 }
 
@@ -408,17 +402,16 @@ fn draw_welcome(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn draw_typing(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_typing(frame: &mut Frame, area: Rect, app: &CaroApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Prompt
-            Constraint::Length(3),  // Input
-            Constraint::Min(1),     // Suggestions or history
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(1),
         ])
         .split(area);
 
-    // Prompt
     let prompt = Paragraph::new(Line::from(vec![
         Span::styled("[?] ", Style::default().fg(Color::Rgb(255, 140, 66))),
         Span::styled(
@@ -428,7 +421,6 @@ fn draw_typing(frame: &mut Frame, area: Rect, app: &App) {
     ]));
     frame.render_widget(prompt, chunks[0]);
 
-    // Input line with cursor
     let cursor_visible = (app.frame_count / 15) % 2 == 0;
     let cursor = if cursor_visible { "_" } else { " " };
 
@@ -448,13 +440,12 @@ fn draw_typing(frame: &mut Frame, area: Rect, app: &App) {
     );
     frame.render_widget(input, chunks[1]);
 
-    // Suggestions
     if app.show_suggestions && app.input.len() < 3 {
         draw_suggestions(frame, chunks[2], app);
     }
 }
 
-fn draw_suggestions(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_suggestions(frame: &mut Frame, area: Rect, app: &CaroApp) {
     let mut lines = vec![
         Line::from(Span::styled(
             "Try one of these prompts (use arrows to select, Tab to fill):",
@@ -476,10 +467,7 @@ fn draw_suggestions(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(prefix, style),
             Span::styled(format!("\"{prompt}\""), style),
             Span::styled(" ", Style::default()),
-            Span::styled(
-                safety.icon(),
-                Style::default().fg(safety.color()),
-            ),
+            Span::styled(safety.icon(), Style::default().fg(safety.color())),
         ]));
     }
 
@@ -487,7 +475,7 @@ fn draw_suggestions(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(suggestions, area);
 }
 
-fn draw_thinking(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_thinking(frame: &mut Frame, area: Rect, app: &CaroApp) {
     let dots = ".".repeat(app.thinking_dots);
     let spinner_frames = ["|", "/", "-", "\\"];
     let spinner = spinner_frames[app.thinking_frame % 4];
@@ -525,7 +513,7 @@ fn draw_thinking(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-fn draw_result(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_result(frame: &mut Frame, area: Rect, app: &CaroApp) {
     let (command, safety) = app.current_result.as_ref().unwrap();
 
     let mut lines = vec![
@@ -546,7 +534,6 @@ fn draw_result(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
     ];
 
-    // Safety badge
     let safety_line = Line::from(vec![
         Span::styled(" ", Style::default()),
         Span::styled(
@@ -564,7 +551,6 @@ fn draw_result(frame: &mut Frame, area: Rect, app: &App) {
     lines.push(safety_line);
     lines.push(Line::from(""));
 
-    // Action prompt
     if *safety != SafetyLevel::Critical {
         lines.push(Line::from(vec![
             Span::styled(" Execute this command? ", Style::default().fg(Color::White)),
@@ -590,12 +576,12 @@ fn draw_result(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-fn draw_status_bar(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_status_bar(frame: &mut Frame, area: Rect, app: &CaroApp) {
     let help_text = match app.state {
-        AppState::Welcome => "Press any key to start",
-        AppState::Typing => "Enter: Generate | Tab: Complete | Esc: Clear",
-        AppState::Thinking => "Processing...",
-        AppState::Result => "Press any key to continue",
+        FrameState::Welcome => "Press any key to start",
+        FrameState::Typing => "Enter: Generate | Tab: Complete | Esc: Clear",
+        FrameState::Thinking => "Processing...",
+        FrameState::Result => "Press any key to continue",
     };
 
     let status = Paragraph::new(Line::from(vec![
@@ -623,48 +609,39 @@ fn draw_status_bar(frame: &mut Frame, area: Rect, app: &App) {
 // ============================================================================
 
 #[wasm_bindgen(start)]
-pub fn main() -> Result<(), JsValue> {
-    // Set panic hook for better error messages
+pub fn main() {
     console_error_panic_hook::set_once();
 
-    let app = Rc::new(RefCell::new(App::default()));
+    let app = Rc::new(RefCell::new(CaroApp::default()));
 
-    let backend = DomBackend::new()?;
-    let renderer = WebRenderer::new(backend);
+    let backend = DomBackend::new().expect("failed to create DOM backend");
+    let mut terminal = Terminal::new(backend).expect("failed to create terminal");
 
     // Keyboard event handling
     let app_clone = app.clone();
-    renderer.on_key_event(move |key_event| {
-        app_clone.borrow_mut().handle_key(&key_event.key());
+    terminal.on_key_event(move |key_event: ratzilla::event::KeyEvent| {
+        app_clone.borrow_mut().handle_key(&key_event);
     });
 
-    // Animation loop
-    let app_clone = app.clone();
-    renderer.on_tick(move |frame| {
-        let mut app = app_clone.borrow_mut();
-        app.tick();
-        draw(frame, &app);
+    // Render loop
+    terminal.draw_web(move |frame| {
+        let mut a = app.borrow_mut();
+        a.tick();
+        draw(frame, &a);
     });
-
-    renderer.run()
 }
 
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
-
-// For panic messages
+// Panic hook
 mod console_error_panic_hook {
     use std::panic;
+    use wasm_bindgen::JsValue;
 
     pub fn set_once() {
         static SET: std::sync::Once = std::sync::Once::new();
         SET.call_once(|| {
             panic::set_hook(Box::new(|info| {
                 let msg = info.to_string();
-                web_sys::console::error_1(&msg.into());
+                ratzilla::web_sys::console::error_1(&JsValue::from_str(&msg));
             }));
         });
     }
